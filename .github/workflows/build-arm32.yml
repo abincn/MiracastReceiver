@@ -51,7 +51,7 @@ jobs:
             --ks /tmp/release.keystore \
             --ks-pass "pass:$SIGNING_STORE_PASSWORD" \
             --ks-key-alias "$SIGNING_KEY_ALIAS" \
-            --key-pass "pass:$SIGNING_KEY_PASSWORD" \
+            --key-pass "pass:$SIGNING_STORE_PASSWORD" \
             --out MiracastReceiver/app/build/outputs/apk/release/miracast-receiver-1.2.7-armeabi-v7a.apk \
             /tmp/aligned.apk
           "$BUILD_TOOLS/apksigner" verify --verbose MiracastReceiver/app/build/outputs/apk/release/miracast-receiver-1.2.7-armeabi-v7a.apk
