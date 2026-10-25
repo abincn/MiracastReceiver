@@ -31,6 +31,9 @@
          持有「显示在其他应用上层」权限的应用可豁免，否则应用不在前台时投屏没有画面 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- 应用内更新：下载 APK 后调起系统安装需要 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- TV 特性声明 -->
     <uses-feature
         android:name="android.hardware.touchscreen"
@@ -86,6 +89,17 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice" />
+
+        <!-- 应用内更新：把下载的 APK 分享给系统安装器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
 
         <!-- 开机自启：把接收服务拉起来，不打开界面 -->
         <receiver

@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
+import android.widget.Button
+import android.widget.ProgressBar
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -19,6 +21,7 @@ import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
 import com.weekd.miracastreceiver.discovery.MdnsAdvertiser
 import com.weekd.miracastreceiver.service.CastReceiverService
+import com.weekd.miracastreceiver.update.AppUpdate
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.utils.NetworkUtils
 import kotlinx.coroutines.delay
@@ -39,12 +42,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvConnectionCode: TextView
     private lateinit var tvStatus: TextView
     private lateinit var switchAutoStart: SwitchCompat
+    private lateinit var tvVersion: TextView
+    private lateinit var btnCheckUpdate: Button
 
     private var connectionCode: String = ""
 
     /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说 */
     private var wifiPermissionPending = false
     private var overlayPromptShown = false
+    private var checkingUpdate = false
+    private var autoUpdateChecked = false
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1001
@@ -75,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         initViews()
         requestWifiDirectPermissions()
         checkNetworkAndStart()
+        autoCheckUpdate()
     }
 
     private fun requestWifiDirectPermissions() {
@@ -182,12 +190,118 @@ class MainActivity : AppCompatActivity() {
             Timber.i("Auto start on boot set to $isChecked")
         }
 
+        // 应用更新：显示当前版本，按钮手动检查；启动时也会静默查一次
+        tvVersion = findViewById(R.id.tv_version)
+        btnCheckUpdate = findViewById(R.id.btn_check_update)
+        tvVersion.text = getString(R.string.current_version, AppUpdate.currentVersionName(this))
+        btnCheckUpdate.setOnClickListener { manualCheckUpdate() }
+
         // 设置设备名称
         val deviceName = deviceInfoProvider.getDeviceName()
         tvDeviceName.text = deviceName
 
         // 设置连接码
         tvConnectionCode.text = getString(R.string.connection_code, connectionCode)
+    }
+
+    /**
+     * 手动检查更新：按钮触发。检查失败会明确提示失败原因，
+     * 不会像“已是最新版本”那样把失败和无更新混在一起。
+     */
+    private fun manualCheckUpdate() {
+        if (checkingUpdate) return
+        checkingUpdate = true
+        btnCheckUpdate.isEnabled = false
+        btnCheckUpdate.text = getString(R.string.checking_update)
+        lifecycleScope.launch {
+            try {
+                when (val result = AppUpdate.checkForUpdate(this@MainActivity)) {
+                    is AppUpdate.CheckResult.UpToDate -> {
+                        Toast.makeText(this@MainActivity, R.string.update_already_latest, Toast.LENGTH_SHORT).show()
+                    }
+                    is AppUpdate.CheckResult.Failed -> {
+                        Toast.makeText(
+                            this@MainActivity,
+                            getString(R.string.update_check_failed, result.reason),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                    is AppUpdate.CheckResult.Available -> {
+                        AppUpdate.markNotified(this@MainActivity, result.info.versionName)
+                        promptUpdate(result.info)
+                    }
+                }
+            } finally {
+                checkingUpdate = false
+                btnCheckUpdate.isEnabled = true
+                btnCheckUpdate.text = getString(R.string.check_update)
+            }
+        }
+    }
+
+    /**
+     * 启动时静默检查一次：只有真有新版、且该版本没提示过时才弹窗，
+     * 无更新或检查失败都不打扰。
+     */
+    private fun autoCheckUpdate() {
+        if (autoUpdateChecked) return
+        autoUpdateChecked = true
+        lifecycleScope.launch {
+            when (val result = AppUpdate.checkForUpdate(this@MainActivity)) {
+                is AppUpdate.CheckResult.Available -> {
+                    if (!AppUpdate.alreadyNotified(this@MainActivity, result.info.versionName)) {
+                        AppUpdate.markNotified(this@MainActivity, result.info.versionName)
+                        promptUpdate(result.info)
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun promptUpdate(info: AppUpdate.UpdateInfo) {
+        val current = AppUpdate.currentVersionName(this)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_available_title, info.versionName))
+            .setMessage(getString(R.string.update_available_message, current, info.versionName, info.displaySize))
+            .setPositiveButton(R.string.update_now) { _, _ -> downloadAndInstall(info) }
+            .setNegativeButton(R.string.update_later, null)
+            .show()
+    }
+
+    private fun downloadAndInstall(info: AppUpdate.UpdateInfo) {
+        val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            setPadding(48, 32, 48, 8)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.update_downloading)
+            .setView(progressBar)
+            .setCancelable(false)
+            .show()
+        lifecycleScope.launch {
+            val file = AppUpdate.downloadUpdate(this@MainActivity, info) { progress ->
+                progressBar.progress = progress
+            }
+            dialog.dismiss()
+            if (file == null) {
+                Toast.makeText(this@MainActivity, R.string.update_download_failed, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            when (AppUpdate.installApk(this@MainActivity, file)) {
+                AppUpdate.InstallOutcome.NEEDS_PERMISSION -> {
+                    Toast.makeText(
+                        this@MainActivity,
+                        R.string.update_need_install_permission,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                AppUpdate.InstallOutcome.FAILED -> {
+                    Toast.makeText(this@MainActivity, R.string.update_install_failed, Toast.LENGTH_LONG).show()
+                }
+                AppUpdate.InstallOutcome.STARTED -> Unit
+            }
+        }
     }
 
     private fun checkNetworkAndStart() {
