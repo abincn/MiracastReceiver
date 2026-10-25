@@ -19,8 +19,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.2.7"
+        versionCode = 13
+        versionName = "1.2.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -56,6 +56,13 @@ android {
             reset()
             include(*targetAbis.toTypedArray())
             isUniversalApk = buildUniversalApk
+        }
+    }
+
+    // 应用内可切换界面语言，AAB 不能按语言拆包，否则切到设备没下载的语言会缺资源
+    bundle {
+        language {
+            enableSplit = false
         }
     }
 
@@ -107,9 +114,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.5.0")
     implementation("androidx.media3:media3-ui:1.5.0")
     implementation("androidx.media3:media3-common:1.5.0")
-
-    // WebRTC
-    implementation("org.webrtc:google-webrtc:1.0.32006")
 
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")

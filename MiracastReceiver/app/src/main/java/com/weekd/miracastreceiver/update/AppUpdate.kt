@@ -16,17 +16,20 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * 应用内自动更新：检查上游 GitHub Releases，下载对应架构的 APK 并调起安装。
+ * 应用内自动更新：检查 fork 自身 GitHub Releases，下载对应架构的 APK 并调起安装。
  *
- * 更新源：weekdayjast/MiracastReceiver 的公开 Releases（无需 token）。
- * 版本比较：用 tag 的语义版本号（如 v1.2.7）与本机 versionName 比较，
- * 因为上游 Release 文件名里不带 versionCode，无法按构建号比较。
+ * 更新源：abincn/MiracastReceiver 的公开 Releases（无需 token）。
+ * 之所以不直接查上游 weekdayjast：上游包是作者签名，与 fork 包签名不同，
+ * 直接覆盖安装会报签名冲突；fork Release 里的包是同一把 fork 证书签的，
+ * 才能直接覆盖安装。fork Release 由每日定时任务在上游有新版时同步构建发布。
+ * 版本比较：用 tag 的语义版本号（如 v1.2.8）与本机 versionName 比较，
+ * 因为 Release 文件名里不带 versionCode，无法按构建号比较。
  * 架构选择：按本机首选 ABI（arm64-v8a / armeabi-v7a）挑对应包，找不到则回退 universal 包。
  */
 object AppUpdate {
 
     private const val RELEASES_LATEST_URL =
-        "https://api.github.com/repos/weekdayjast/MiracastReceiver/releases/latest"
+        "https://api.github.com/repos/abincn/MiracastReceiver/releases/latest"
     private const val PREFS_NAME = "app_update"
     private const val KEY_NOTIFIED_VERSION = "notified_version"
 
@@ -107,6 +110,10 @@ object AppUpdate {
                     .header("Accept", "application/vnd.github+json")
                     .build()
                 val response = httpClient.newCall(request).execute()
+                if (response.code == 404) {
+                    // fork 还没发过 Release：没有可更新的包，不是网络或服务故障
+                    return@withContext CheckResult.UpToDate
+                }
                 if (!response.isSuccessful) {
                     return@withContext CheckResult.Failed("服务端返回 ${response.code}")
                 }
