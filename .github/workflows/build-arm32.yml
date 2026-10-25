@@ -32,7 +32,9 @@ jobs:
 
       - name: Build armeabi-v7a release APK
         working-directory: MiracastReceiver
-        run: ./gradlew assembleRelease -PbuildArm32 --no-daemon --console=plain
+        run:|
+        chmod +x gradlew
+        ./gradlew assembleRelease -PbuildArm32 --no-daemon --console=plain
 
       - name: Sign APK with the fork release keystore
         env:
