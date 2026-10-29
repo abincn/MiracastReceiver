@@ -48,6 +48,7 @@ class DlnaMediaRenderer {
         state.currentIndex = state.playlist.indexOf(state.uri).takeIf { it >= 0 } ?: 0
         state.transportState = TransportState.STOPPED
         Timber.i("DLNA SetAVTransportURI: ${state.uri}, playlist size=${state.playlist.size}")
+        DlnaDiagnostic.recordRequest("渲染器收到 SetURI，播放列表 ${state.playlist.size} 条，拉播放页：${state.uri.take(200)}")
         onSetUri?.invoke(state.uri, metadata)
     }
 
