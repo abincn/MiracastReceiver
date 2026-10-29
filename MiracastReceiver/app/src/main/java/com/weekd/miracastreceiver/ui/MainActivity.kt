@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
 import com.weekd.miracastreceiver.discovery.MdnsAdvertiser
+import com.weekd.miracastreceiver.dlna.DlnaDiagnostic
 import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.update.AppUpdate
 import com.weekd.miracastreceiver.util.AppLanguage
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDeviceName: TextView
     private lateinit var tvDeviceIp: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var tvDlnaLog: TextView
     private lateinit var switchAutoStart: SwitchCompat
     private lateinit var tvVersion: TextView
     private lateinit var btnCheckUpdate: Button
@@ -181,6 +183,8 @@ class MainActivity : AppCompatActivity() {
         tvDeviceName = findViewById(R.id.tv_device_name)
         tvDeviceIp = findViewById(R.id.tv_device_ip)
         tvStatus = findViewById(R.id.tv_status)
+        tvDlnaLog = findViewById(R.id.tv_dlna_log)
+        tvDlnaLog.text = DlnaDiagnostic.summary()
         switchAutoStart = findViewById(R.id.switch_auto_start)
         tvLanguageValue = findViewById(R.id.tv_language_value)
 
@@ -403,6 +407,10 @@ class MainActivity : AppCompatActivity() {
                     tvStatus.text = getString(R.string.waiting_connection)
                 } else {
                     tvStatus.text = getString(R.string.status_service_starting)
+                }
+                // 1.2.9.3：每 2 秒刷新 DLNA 诊断，投屏那一下有没有到电视一目了然
+                if (::tvDlnaLog.isInitialized) {
+                    tvDlnaLog.text = DlnaDiagnostic.summary()
                 }
                 delay(2000)
             }
