@@ -19,12 +19,13 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        // fork 专属补丁：上游仍是 1.2.9，本版只加自定义投屏名称。
-        // 用 1.2.9.1 而不用 1.2.10，避免与上游下一个 1.2.10 撞版本号/tag；
-        // AppUpdate 按语义版本比较，1.2.9.1 > 1.2.9，所以电视会提示更新，
+        // fork 专属补丁：上游仍是 1.2.9，本版把投屏名称改成 App 名 + 型号，
+        // 废弃 1.2.9.1 的手动输入框（遥控器输入、点保存后走不下去）。
+        // 仍用 1.2.9.x 而不用 1.2.10，避免与上游下一个 1.2.10 撞版本号/tag；
+        // AppUpdate 按语义版本比较，1.2.9.2 > 1.2.9.1，所以电视会提示更新，
         // 且 < 1.2.10，之后上游出 1.2.10 时仍能正常再更新。
-        versionCode = 15
-        versionName = "1.2.9.1"
+        versionCode = 16
+        versionName = "1.2.9.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
