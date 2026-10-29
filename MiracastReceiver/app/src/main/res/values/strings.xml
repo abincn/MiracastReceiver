@@ -13,6 +13,15 @@
     <string name="auto_start_on_boot_hint">Runs in the background after the TV turns on, without opening this app. Some TVs also require allowing auto-start for this app in system settings.</string>
     <string name="language">Language</string>
     <string name="language_follow_system">Follow system</string>
+
+    <!-- 自定义投屏名称（fork 新增，仅默认语言文件有，其他语言回退到这里） -->
+    <string name="display_name">投屏名称</string>
+    <string name="display_name_hint">对外广播的名字，改成与电视自带投屏不同的名字即可区分。改名后接收服务会重启，正在投屏会被断开。</string>
+    <string name="display_name_title">自定义投屏名称</string>
+    <string name="display_name_edit_hint">留空则跟随电视系统名称</string>
+    <string name="display_name_save">保存</string>
+    <string name="display_name_clear">恢复系统名称</string>
+    <string name="display_name_saved">已保存，接收服务正在重启…</string>
     <string name="status_no_network">No network connection</string>
     <string name="status_no_wifi">Not connected to Wi-Fi</string>
     <string name="status_service_starting">Starting service…</string>
