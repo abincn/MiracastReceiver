@@ -1,19 +1,22 @@
 package com.weekd.miracastreceiver.dlna
 
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 
 /**
- * DLNA 诊断：主界面上能看到的最近一次请求。
+ * DLNA 诊断：主界面下方滚动日志框里显示的历史记录。
  *
  * 服务和主界面在同一个进程里，所以这个单例两边都能读写。
- * 目的就是回答“投屏那一下到底有没有到电视”：
- * 投完如果这里还是“暂无请求”，说明发送端根本没把 SetURI 发到这台电视
- * （点错了设备、订阅失败、网络问题等）；如果这里有 SetURI，
- * 说明问题在拉起播放页或播地址那一步。
+ * 1.2.9.3 只存最近一条，投完回来容易被后续 SUBSCRIBE / 轮询盖掉；
+ * 1.2.9.4 改存最近 100 条，按时间顺序追加，SetURI 不会再被订阅盖掉。
  */
 object DlnaDiagnostic {
+    private const val MAX_ENTRIES = 100
+    private val history = ArrayDeque<String>()
+    private val lock = Any()
+
     @Volatile
     var lastRequest: String = ""
         private set
@@ -23,20 +26,45 @@ object DlnaDiagnostic {
         private set
 
     fun recordRequest(text: String) {
-        lastRequest = "${time()} $text".take(500)
+        val entry = "${time()} $text".take(500)
+        lastRequest = entry
+        synchronized(lock) {
+            history.addLast(entry)
+            while (history.size > MAX_ENTRIES) {
+                history.removeFirst()
+            }
+        }
     }
 
     fun recordError(text: String) {
-        lastError = "${time()} $text".take(500)
+        val entry = "${time()} 错误：$text".take(500)
+        lastError = entry
+        synchronized(lock) {
+            history.addLast(entry)
+            while (history.size > MAX_ENTRIES) {
+                history.removeFirst()
+            }
+        }
+    }
+
+    fun historyText(): String {
+        synchronized(lock) {
+            return if (history.isEmpty()) {
+                "暂无请求（投一次试试）"
+            } else {
+                history.joinToString("\n")
+            }
+        }
+    }
+
+    fun historySize(): Int {
+        synchronized(lock) {
+            return history.size
+        }
     }
 
     fun summary(): String {
-        val request = if (lastRequest.isEmpty()) "暂无请求（投一次试试）" else lastRequest
-        return if (lastError.isEmpty()) {
-            "DLNA 日志：$request"
-        } else {
-            "DLNA 日志：$request\n错误：$lastError"
-        }
+        return "DLNA 日志：\n" + historyText()
     }
 
     private fun time(): String {
