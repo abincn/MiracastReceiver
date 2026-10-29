@@ -13,6 +13,7 @@ object AppSettings {
     private const val PREFS_NAME = "miracast_settings"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     private const val KEY_LANGUAGE = "language"
+    private const val KEY_CUSTOM_DISPLAY_NAME = "custom_display_name"
 
     /**
      * 是否开机自动启动接收服务。
@@ -25,6 +26,19 @@ object AppSettings {
 
     fun setAutoStartOnBoot(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_START_ON_BOOT, enabled).apply()
+    }
+
+    /**
+     * 用户自定义的投屏名称，空串表示跟随电视系统名称。
+     * 只影响本应用对外广播的名字（AirPlay / DLNA / Miracast 共用，
+     * 见 DeviceInfoProvider），不改电视系统设备名，所以不会把电视
+     * 自带投屏也一起改名 —— 这正是用来区分两个同名条目的。
+     */
+    fun getCustomDisplayName(context: Context): String =
+        prefs(context).getString(KEY_CUSTOM_DISPLAY_NAME, "")?.trim() ?: ""
+
+    fun setCustomDisplayName(context: Context, name: String) {
+        prefs(context).edit().putString(KEY_CUSTOM_DISPLAY_NAME, name.trim()).apply()
     }
 
     /** 界面语言的 BCP 47 标签，空串表示跟随系统。由 [AppLanguage] 读写。 */
