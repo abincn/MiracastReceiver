@@ -82,17 +82,6 @@
             android:indeterminate="true"
             android:indeterminateTint="@color/accent" />
 
-        <!-- DLNA 诊断：最近一次投屏请求，投完还看不到画面时先看这一行 -->
-        <TextView
-            android:id="@+id/tv_dlna_log"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:gravity="center"
-            android:maxLines="6"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp" />
-
         <!-- 设置：开机自启 -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -246,6 +235,38 @@
             android:text="@string/connect_instruction"
             android:textColor="@color/text_secondary"
             android:textSize="13sp" />
+
+        <!-- DLNA 日志：放在主界面最下方，带滚动条的历史记录。
+             1.2.9.3 只存最近一条，投完回来容易被后续订阅/轮询盖掉；
+             本版改存最近 100 条，遥控器聚焦到日志框后上下键可滚动查看。 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="DLNA 日志"
+            android:textColor="@color/text_secondary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:id="@+id/scroll_dlna_log"
+            android:layout_width="match_parent"
+            android:layout_height="240dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_setting_item"
+            android:fadeScrollbars="false"
+            android:focusable="true"
+            android:padding="12dp"
+            android:scrollbars="vertical">
+
+            <TextView
+                android:id="@+id/tv_dlna_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="2dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </ScrollView>
     </LinearLayout>
 
 </ScrollView>
