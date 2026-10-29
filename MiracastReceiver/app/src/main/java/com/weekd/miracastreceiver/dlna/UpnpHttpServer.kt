@@ -8,8 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
@@ -70,36 +68,107 @@ class UpnpHttpServer(
     private fun handleClient(socket: Socket) {
         socket.use { client ->
             try {
-                val reader = BufferedReader(InputStreamReader(client.getInputStream()))
+                // 1.2.9.3 诊断版改动：改用原始字节流读请求。
+                // 原实现用 BufferedReader 按 Content-Length（字节数）去读字符：
+                // 中文元数据下字节数 > 字符数，读到的 body 会带一串 \u0000，
+                // 且一次 read 未必读满。改成按字节数循环读满再按 UTF-8 解码，
+                // 同时支持 Transfer-Encoding: chunked 的发送端。
+                val input = client.getInputStream()
                 val output = client.getOutputStream()
 
-                val requestLine = reader.readLine() ?: return
+                val headerBytes = java.io.ByteArrayOutputStream()
+                var prev = -1
+                var cur: Int
+                var headerEnd = false
+                while (true) {
+                    cur = input.read()
+                    if (cur == -1) return
+                    headerBytes.write(cur)
+                    if (prev == '\r'.code && cur == '\n'.code) {
+                        val bytes = headerBytes.toByteArray()
+                        if (bytes.size >= 4 &&
+                            bytes[bytes.size - 4] == '\r'.code.toByte() &&
+                            bytes[bytes.size - 3] == '\n'.code.toByte() &&
+                            bytes[bytes.size - 2] == '\r'.code.toByte()
+                        ) {
+                            headerEnd = true
+                            break
+                        }
+                    }
+                    // \n\n 结尾的容错
+                    if (cur == '\n'.code && prev == '\n'.code) {
+                        headerEnd = true
+                        break
+                    }
+                    prev = cur
+                }
+                if (!headerEnd) return
+                val headerText = String(headerBytes.toByteArray(), Charsets.US_ASCII)
+                val headerLines = headerText.split("\r\n", "\n").filter { it.isNotEmpty() }
+                if (headerLines.isEmpty()) return
+                val requestLine = headerLines[0]
                 val headers = mutableMapOf<String, String>()
                 var contentLength = 0
-
-                var line: String?
-                while (true) {
-                    line = reader.readLine()
-                    if (line.isNullOrEmpty()) break
+                var chunked = false
+                for (line in headerLines.drop(1)) {
                     val index = line.indexOf(':')
                     if (index > 0) {
                         val key = line.substring(0, index).trim()
                         val value = line.substring(index + 1).trim()
                         headers[key] = value
-
                         if (key.equals("Content-Length", ignoreCase = true)) {
                             contentLength = value.toIntOrNull() ?: 0
+                        }
+                        if (key.equals("Transfer-Encoding", ignoreCase = true) &&
+                            value.contains("chunked", ignoreCase = true)
+                        ) {
+                            chunked = true
                         }
                     }
                 }
 
-                // 读取 body
-                val body = if (contentLength > 0) {
-                    val buffer = CharArray(contentLength)
-                    reader.read(buffer, 0, contentLength)
-                    String(buffer)
-                } else {
-                    ""
+                val body = when {
+                    chunked -> {
+                        val bodyBytes = java.io.ByteArrayOutputStream()
+                        while (true) {
+                            val sizeLine = StringBuilder()
+                            var b: Int
+                            while (true) {
+                                b = input.read()
+                                if (b == -1 || b == '\n'.code) break
+                                if (b != '\r'.code) sizeLine.append(b.toChar())
+                            }
+                            if (b == -1) break
+                            val size = sizeLine.toString().substringBefore(';').trim()
+                                .toIntOrNull(16) ?: break
+                            if (size == 0) break
+                            var remaining = size
+                            val chunk = ByteArray(size)
+                            var offset = 0
+                            while (remaining > 0) {
+                                val read = input.read(chunk, offset, remaining)
+                                if (read == -1) break
+                                offset += read
+                                remaining -= read
+                            }
+                            bodyBytes.write(chunk, 0, offset)
+                            // 消费 chunk 后的 CRLF
+                            input.read()
+                            input.read()
+                        }
+                        String(bodyBytes.toByteArray(), Charsets.UTF_8)
+                    }
+                    contentLength > 0 -> {
+                        val bodyBytes = ByteArray(contentLength)
+                        var offset = 0
+                        while (offset < contentLength) {
+                            val read = input.read(bodyBytes, offset, contentLength - offset)
+                            if (read == -1) break
+                            offset += read
+                        }
+                        String(bodyBytes, 0, offset, Charsets.UTF_8)
+                    }
+                    else -> ""
                 }
 
                 val parts = requestLine.split(" ")
@@ -108,8 +177,16 @@ class UpnpHttpServer(
                     val path = parts[1]
 
                     Timber.d("UPnP $method $path")
+                    DlnaDiagnostic.recordRequest("$method $path")
 
                     when {
+                        method == "SUBSCRIBE" && path.startsWith("/event/") -> {
+                            DlnaDiagnostic.recordRequest("SUBSCRIBE $path")
+                            sendSubscribeResponse(output)
+                        }
+                        method == "UNSUBSCRIBE" && path.startsWith("/event/") -> {
+                            sendSubscribeResponse(output)
+                        }
                         path == "/device.xml" -> sendDeviceDescription(output)
                         path == "/service/ConnectionManager.xml" -> sendConnectionManagerScpd(output)
                         path == "/service/AVTransport.xml" -> sendAvTransportScpd(output)
@@ -123,8 +200,25 @@ class UpnpHttpServer(
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Error handling UPnP client")
+                DlnaDiagnostic.recordError("UPnP 请求处理失败：${e.message}")
             }
         }
+    }
+
+    private fun sendSubscribeResponse(output: OutputStream) {
+        // 原实现对 SUBSCRIBE 只回一个空 200，不带 SID/TIMEOUT，
+        // 严格的客户端会把订阅当失败、进而不再发 SetURI。
+        // 这里按 UPnP 事件规范回 SID 和超时，让订阅被认作成功。
+        // 本机暂不推送事件，订阅本身不再是拦路点。
+        val response = "HTTP/1.1 200 OK\r\n" +
+            "SERVER: Android/11 UPnP/1.0 MiracastReceiver/1.0\r\n" +
+            "SID: uuid:$deviceUuid\r\n" +
+            "TIMEOUT: Second-1800\r\n" +
+            "Content-Length: 0\r\n" +
+            "Connection: close\r\n" +
+            "\r\n"
+        output.write(response.toByteArray())
+        output.flush()
     }
 
     private fun sendDeviceDescription(output: OutputStream) {
@@ -148,12 +242,26 @@ class UpnpHttpServer(
     }
 
     private fun handleAvTransportControl(output: OutputStream, body: String, headers: Map<String, String>) {
-        val action = SoapParser.extractAction(headers["SOAPACTION"] ?: headers["SOAPAction"])
+        // 1.2.9.3：SOAPAction 头不区分大小写匹配，原实现只认 SOAPACTION/SOAPAction
+        // 两种写法，别的写法会走到 401 Invalid Action，发送端就以为被拒绝。
+        val soapAction = headers.entries.firstOrNull {
+            it.key.equals("SOAPAction", ignoreCase = true)
+        }?.value
+        val action = SoapParser.extractAction(soapAction)
         Timber.i("AVTransport action: $action")
+        DlnaDiagnostic.recordRequest("AVTransport $action")
 
         // 调试：打印完整请求体，帮助排查 Emby 的格式
         if (action == "SetAVTransportURI") {
             Timber.d("SetAVTransportURI body (first 1000 chars): ${body.take(1000)}")
+            val uri = SoapParser.extractTagValue(body, "CurrentURI")
+            DlnaDiagnostic.recordRequest("SetURI ${uri.take(200)}")
+            if (uri.isBlank()) {
+                DlnaDiagnostic.recordError("SetURI 到了但 URI 为空，body 前 300 字：${body.take(300)}")
+            }
+        }
+        if (action.isBlank()) {
+            DlnaDiagnostic.recordError("AVTransport 请求无 SOAPAction，headers=${headers.keys}")
         }
 
         val response = when (action) {
