@@ -11,7 +11,9 @@ import android.provider.Settings
 import android.view.View
 import android.widget.Toast
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ProgressBar
+import android.text.InputType
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -46,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvVersion: TextView
     private lateinit var btnCheckUpdate: Button
     private lateinit var tvLanguageValue: TextView
+    private lateinit var tvDisplayNameValue: TextView
 
 
     /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说 */
@@ -203,6 +206,48 @@ class MainActivity : AppCompatActivity() {
         // 设置设备名称
         val deviceName = deviceInfoProvider.getDeviceName()
         tvDeviceName.text = deviceName
+
+        // 自定义投屏名称：点开可改，改完只改本应用的广播名，不改电视系统名
+        tvDisplayNameValue = findViewById(R.id.tv_display_name_value)
+        tvDisplayNameValue.text = deviceName
+        findViewById<View>(R.id.setting_display_name).setOnClickListener { showDisplayNameDialog() }
+    }
+
+    private fun showDisplayNameDialog() {
+        val editText = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine()
+            hint = getString(R.string.display_name_edit_hint)
+            setText(AppSettings.getCustomDisplayName(this@MainActivity))
+            setSelection(text.length)
+            setPadding(48, 32, 48, 32)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.display_name_title)
+            .setView(editText)
+            .setPositiveButton(R.string.display_name_save) { _, _ ->
+                applyDisplayName(editText.text.toString().trim())
+            }
+            .setNeutralButton(R.string.display_name_clear) { _, _ ->
+                applyDisplayName("")
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyDisplayName(name: String) {
+        AppSettings.setCustomDisplayName(this, name)
+        val deviceName = deviceInfoProvider.getDeviceName()
+        tvDeviceName.text = deviceName
+        tvDisplayNameValue.text = deviceName
+        Toast.makeText(this, R.string.display_name_saved, Toast.LENGTH_SHORT).show()
+        Timber.i("Custom display name set to '${name.ifEmpty { "system" }}', restarting cast service")
+        // 服务启动时才读一次设备名，改名必须重启服务 + 重新广播，否则
+        // AirPlay / DLNA 还挂着旧名字。正在投屏会被断开，见界面上的提示。
+        mdnsAdvertiser.stopAdvertising()
+        stopService(Intent(this, CastReceiverService::class.java))
+        startCastService()
+        startAdvertising()
     }
     /** 第一项是「跟随系统」，其后是 [AppLanguage.OPTIONS]。 */
     private fun languageLabels(): Array<String> =
