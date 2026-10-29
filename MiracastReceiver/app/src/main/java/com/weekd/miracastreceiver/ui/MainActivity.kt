@@ -30,6 +30,7 @@ import com.weekd.miracastreceiver.utils.NetworkUtils
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import android.widget.ScrollView
 import android.widget.TextView
 
 /**
@@ -44,6 +45,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDeviceIp: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvDlnaLog: TextView
+    private lateinit var scrollDlnaLog: ScrollView
+    private var lastDlnaHistorySize = -1
     private lateinit var switchAutoStart: SwitchCompat
     private lateinit var tvVersion: TextView
     private lateinit var btnCheckUpdate: Button
@@ -184,7 +187,9 @@ class MainActivity : AppCompatActivity() {
         tvDeviceIp = findViewById(R.id.tv_device_ip)
         tvStatus = findViewById(R.id.tv_status)
         tvDlnaLog = findViewById(R.id.tv_dlna_log)
+        scrollDlnaLog = findViewById(R.id.scroll_dlna_log)
         tvDlnaLog.text = DlnaDiagnostic.summary()
+        lastDlnaHistorySize = DlnaDiagnostic.historySize()
         switchAutoStart = findViewById(R.id.switch_auto_start)
         tvLanguageValue = findViewById(R.id.tv_language_value)
 
@@ -408,9 +413,17 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     tvStatus.text = getString(R.string.status_service_starting)
                 }
-                // 1.2.9.3：每 2 秒刷新 DLNA 诊断，投屏那一下有没有到电视一目了然
+                // 1.2.9.4：每 2 秒刷新下方滚动日志；只有新增记录时才滚到底，
+                // 免得用户正往上翻旧记录时被自动滚动打断。
                 if (::tvDlnaLog.isInitialized) {
-                    tvDlnaLog.text = DlnaDiagnostic.summary()
+                    val size = DlnaDiagnostic.historySize()
+                    if (size != lastDlnaHistorySize) {
+                        lastDlnaHistorySize = size
+                        tvDlnaLog.text = DlnaDiagnostic.summary()
+                        scrollDlnaLog.post {
+                            scrollDlnaLog.fullScroll(View.FOCUS_DOWN)
+                        }
+                    }
                 }
                 delay(2000)
             }
