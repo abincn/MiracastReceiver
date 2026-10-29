@@ -11,9 +11,7 @@ import android.provider.Settings
 import android.view.View
 import android.widget.Toast
 import android.widget.Button
-import android.widget.EditText
 import android.widget.ProgressBar
-import android.text.InputType
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -48,7 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvVersion: TextView
     private lateinit var btnCheckUpdate: Button
     private lateinit var tvLanguageValue: TextView
-    private lateinit var tvDisplayNameValue: TextView
+    private lateinit var switchDisplayName: SwitchCompat
 
 
     /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说 */
@@ -203,51 +201,22 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.setting_language).setOnClickListener { showLanguageDialog() }
         tvLanguageValue.text = currentLanguageLabel()
 
-        // 设置设备名称
+        // 设置设备名称：默认就是 App 名 + 型号，无需手动输入
         val deviceName = deviceInfoProvider.getDeviceName()
         tvDeviceName.text = deviceName
 
-        // 自定义投屏名称：点开可改，改完只改本应用的广播名，不改电视系统名
-        tvDisplayNameValue = findViewById(R.id.tv_display_name_value)
-        tvDisplayNameValue.text = deviceName
-        findViewById<View>(R.id.setting_display_name).setOnClickListener { showDisplayNameDialog() }
-    }
-
-    private fun showDisplayNameDialog() {
-        val editText = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine()
-            hint = getString(R.string.display_name_edit_hint)
-            setText(AppSettings.getCustomDisplayName(this@MainActivity))
-            setSelection(text.length)
-            setPadding(48, 32, 48, 32)
+        // 投屏名称开关：遥控器直接拨动，不弹输入框。
+        // 1.2.9.1 的输入框 + 即时重启服务是点保存后走不下去的
+        // 可疑点（对话框焦点、服务重启时序），本版改成只存开关、
+        // 重启应用后生效，绝不在点击时停/启服务。
+        switchDisplayName = findViewById(R.id.switch_display_name)
+        switchDisplayName.isChecked = AppSettings.isUseAppModelName(this)
+        switchDisplayName.setOnCheckedChangeListener { _, isChecked ->
+            AppSettings.setUseAppModelName(this, isChecked)
+            tvDeviceName.text = deviceInfoProvider.getDeviceName()
+            Toast.makeText(this, R.string.display_name_restart, Toast.LENGTH_SHORT).show()
+            Timber.i("Use app+model display name set to $isChecked")
         }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.display_name_title)
-            .setView(editText)
-            .setPositiveButton(R.string.display_name_save) { _, _ ->
-                applyDisplayName(editText.text.toString().trim())
-            }
-            .setNeutralButton(R.string.display_name_clear) { _, _ ->
-                applyDisplayName("")
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun applyDisplayName(name: String) {
-        AppSettings.setCustomDisplayName(this, name)
-        val deviceName = deviceInfoProvider.getDeviceName()
-        tvDeviceName.text = deviceName
-        tvDisplayNameValue.text = deviceName
-        Toast.makeText(this, R.string.display_name_saved, Toast.LENGTH_SHORT).show()
-        Timber.i("Custom display name set to '${name.ifEmpty { "system" }}', restarting cast service")
-        // 服务启动时才读一次设备名，改名必须重启服务 + 重新广播，否则
-        // AirPlay / DLNA 还挂着旧名字。正在投屏会被断开，见界面上的提示。
-        mdnsAdvertiser.stopAdvertising()
-        stopService(Intent(this, CastReceiverService::class.java))
-        startCastService()
-        startAdvertising()
     }
     /** 第一项是「跟随系统」，其后是 [AppLanguage.OPTIONS]。 */
     private fun languageLabels(): Array<String> =
