@@ -24,8 +24,8 @@ android {
         // 仍用 1.2.9.x 而不用 1.2.10，避免与上游下一个 1.2.10 撞版本号/tag；
         // AppUpdate 按语义版本比较，1.2.9.2 > 1.2.9.1，所以电视会提示更新，
         // 且 < 1.2.10，之后上游出 1.2.10 时仍能正常再更新。
-        versionCode = 18
-        versionName = "1.2.9.4"
+        versionCode = 19
+        versionName = "1.2.9.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
