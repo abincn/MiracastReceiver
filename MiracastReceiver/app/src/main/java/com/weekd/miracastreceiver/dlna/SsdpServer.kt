@@ -12,6 +12,10 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.NetworkInterface
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * SSDP (Simple Service Discovery Protocol) 服务器
@@ -93,6 +97,14 @@ class SsdpServer(
         // 检查搜索目标
         val searchTarget = extractSearchTarget(message)
 
+        // 1.2.9.5：把每一次 M-SEARCH 都写进主界面滚动日志。
+        // 微信视频号搜不到时，这一行是关键证据：
+        // 有这一行 = 微信发了 DLNA 搜索、电视收到了，问题在回包/过滤；
+        // 没有这一行 = 微信根本没走 DLNA SSDP（或组播被拦），再查协议/网络。
+        DlnaDiagnostic.recordRequest(
+            "SSDP 搜索 ST=${searchTarget ?: "(无 ST)"} 来自 ${address.hostAddress}"
+        )
+
         val shouldRespond = when {
             searchTarget == null -> false
             searchTarget == "ssdp:all" -> true
@@ -106,15 +118,49 @@ class SsdpServer(
         }
 
         if (shouldRespond) {
-            sendSearchResponse(address, port, searchTarget ?: "upnp:rootdevice")
+            if (searchTarget == "ssdp:all") {
+                // 1.2.9.5：按 UPnP 规范，ssdp:all 应回多条（每设备/每服务一条），
+                // 原实现只回一条 ST=ssdp:all，严格客户端可能据此丢弃。
+                // 回包顺序与 NOTIFY 一致：rootdevice、uuid、设备、三个服务。
+                val targets = listOf(
+                    "upnp:rootdevice",
+                    "uuid:$deviceUuid",
+                    DEVICE_TYPE,
+                    SERVICE_TYPE_AV,
+                    SERVICE_TYPE_RC,
+                    SERVICE_TYPE_CM
+                )
+                for (target in targets) {
+                    sendSearchResponse(address, port, target)
+                }
+                DlnaDiagnostic.recordRequest("SSDP 回复 ssdp:all 共 6 条给 ${address.hostAddress}")
+            } else {
+                sendSearchResponse(address, port, searchTarget ?: "upnp:rootdevice")
+                DlnaDiagnostic.recordRequest("SSDP 回复 ST=$searchTarget 给 ${address.hostAddress}")
+            }
+        } else {
+            DlnaDiagnostic.recordRequest("SSDP 未回复 ST=$searchTarget（不在支持列表）")
+        }
+    }
+
+    private fun httpDate(): String {
+        return try {
+            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("GMT")
+            }.format(Date())
+        } catch (e: Exception) {
+            ""
         }
     }
 
     private fun extractSearchTarget(message: String): String? {
-        val lines = message.split("\r\n")
+        // 1.2.9.5：同时按 \r\n 和 \n 切行，原实现只按 \r\n 切，
+        // 只发 \n 的客户端会被误判为无 ST 而不回复。
+        val lines = message.split("\r\n", "\n")
         for (line in lines) {
-            if (line.startsWith("ST:", ignoreCase = true)) {
-                return line.substring(3).trim()
+            if (line.trimStart().startsWith("ST:", ignoreCase = true)) {
+                return line.substringAfter(":", "").trim()
+                    .trim('"')
             }
         }
         return null
@@ -126,6 +172,7 @@ class SsdpServer(
         val response = buildString {
             append("HTTP/1.1 200 OK\r\n")
             append("CACHE-CONTROL: max-age=1800\r\n")
+            append("DATE: ${httpDate()}\r\n")
             append("EXT:\r\n")
             append("LOCATION: $location\r\n")
             append("SERVER: Android/11 UPnP/1.0 MiracastReceiver/1.0\r\n")
