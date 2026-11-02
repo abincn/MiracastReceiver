@@ -7,6 +7,12 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.graphics.RectF
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.net.Uri
@@ -40,9 +46,11 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.airplay.StreamStats
 import com.weekd.miracastreceiver.miracast.RtpReceiver
+import com.weekd.miracastreceiver.util.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -93,7 +101,7 @@ class PlayerActivity : AppCompatActivity() {
                 mirrorSurfaceListener?.invoke()
             }
 
-        /** 镜像 Surface 换了（手动旋转切换渲染视图）时通知 AirPlay 的 URL 视频播放器跟着换。 */
+        /** Surface 重建时通知 AirPlay 的 URL 视频播放器与镜像解码器恢复输出。 */
         @Volatile
         var mirrorSurfaceListener: (() -> Unit)? = null
 
@@ -143,6 +151,15 @@ class PlayerActivity : AppCompatActivity() {
     // 手动旋转画面：只转画面内容，不改屏幕方向，所以电视上也有效
     /** 当前手动旋转角度（0/90/180/270，顺时针）。 */
     private var rotationDegrees = 0
+    private var manualRotationDegrees = 0
+    private var autoRotationDegrees = 0
+    private var miracastContent = RectF(0f, 0f, 1f, 1f)
+    private var cropCandidate: RectF? = null
+    private var cropConfirmations = 0
+    private var cropCopyPending = false
+    private var lastCropSampleAt = 0L
+    private var cropSession = 0
+    private var autoRotateToFit = false
     /** 镜像旋转用的 TextureView 层：0° 时隐藏，仍走 SurfaceView 保住电视上的性能。 */
     private lateinit var mirrorRotateLayer: FrameLayout
     private lateinit var mirrorRotateTexture: TextureView
@@ -175,7 +192,7 @@ class PlayerActivity : AppCompatActivity() {
                 ACTION_PAUSE -> if (isCurrentImage()) stopImageSlideShow() else player?.pause()
                 ACTION_STOP -> {
                     stopPlayback()
-                    finish()
+                    exitPlayer()
                 }
                 ACTION_SEEK -> {
                     val position = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
@@ -206,6 +223,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        autoRotateToFit = com.weekd.miracastreceiver.util.AppSettings.isAutoRotateToFit(this)
         setContentView(R.layout.activity_player)
 
         initViews()
@@ -510,6 +528,23 @@ class PlayerActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent?) {
         // 每次新的投屏请求都从 0° 开始
         rotationDegrees = 0
+        manualRotationDegrees = 0
+        autoRotationDegrees = 0
+        cropSession++
+        miracastContent = RectF(0f, 0f, 1f, 1f)
+        cropCandidate = null
+        cropConfirmations = 0
+        lastCropSampleAt = 0L
+        // Activity 可被新投屏请求复用；清角度之外还要清掉旧 TextureView 变换和输出目标。
+        mirrorRotateTexture.setTransform(Matrix())
+        mirrorRotateLayer.visibility = View.GONE
+        exoRotateTexture?.setTransform(Matrix())
+        exoRotateTexture?.let { player?.clearVideoTextureView(it) }
+        exoRotateLayer?.visibility = View.GONE
+        playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        (playerView.videoSurfaceView as? SurfaceView)?.let { player?.setVideoSurfaceView(it) }
+        resetImageRotation()
+        updateMirrorSurfaceTarget()
         if (intent?.getStringExtra(EXTRA_SOURCE_TYPE) == "MIRACAST") {
             startMiracastPlayback(intent.getIntExtra(EXTRA_RTP_PORT, 0), intent.getStringExtra(EXTRA_SESSION_ID))
             return
@@ -615,6 +650,7 @@ class PlayerActivity : AppCompatActivity() {
             var lastParentW = 0
             var lastParentH = 0
             while (isActive) {
+                sampleMiracastContent()
                 val videoW = StreamStats.videoWidth
                 val videoH = StreamStats.videoHeight
                 // 手动旋转后父视图宽高会对调，也要重新适配，否则画面仍按旋转前的框显示
@@ -1030,13 +1066,31 @@ class PlayerActivity : AppCompatActivity() {
      * 只旋转画面内容、不改屏幕方向，所以电视（忽略方向请求）上也有效。
      */
     private fun rotateClockwise() {
-        rotationDegrees = (rotationDegrees + 90) % 360
-        Timber.i("Manual rotation -> $rotationDegrees°")
+        manualRotationDegrees = (manualRotationDegrees + 90) % 360
+        Timber.i("Manual rotation offset -> $manualRotationDegrees°")
         applyRotation()
     }
 
     /** 按当前模式把 [rotationDegrees] 应用到画面上；尺寸变化时也会被反复调用，要保证幂等。 */
     private fun applyRotation() {
+        autoRotateToFit = com.weekd.miracastreceiver.util.AppSettings.isAutoRotateToFit(this)
+        if (autoRotateToFit && (isMirrorSession() || !isCurrentImage())) {
+            val content = findViewById<View>(android.R.id.content)
+            val size = player?.videoSize
+            val w = if (isMirrorSession()) StreamStats.videoWidth.toFloat() * activeMirrorCrop().width()
+                else (size?.width ?: 0) * (size?.pixelWidthHeightRatio ?: 1f)
+            val h = if (isMirrorSession()) StreamStats.videoHeight * activeMirrorCrop().height() else (size?.height ?: 0).toFloat()
+            if (w > 0 && h > 0 && content.width > 0 && content.height > 0) {
+                val targetRotation = if ((w > h) != (content.width > content.height)) 90 else 0
+                if (autoRotationDegrees != targetRotation) {
+                    Timber.i("Auto rotation: video=${w}x$h screen=${content.width}x${content.height} -> $targetRotation")
+                    autoRotationDegrees = targetRotation
+                }
+            }
+        } else {
+            autoRotationDegrees = 0
+        }
+        rotationDegrees = (autoRotationDegrees + manualRotationDegrees) % 360
         when {
             isMirrorSession() -> applyMirrorRotation()
             isCurrentImage() -> applyImageRotation()
@@ -1048,8 +1102,9 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun applyMirrorRotation() {
-        setMirrorRotateLayerVisible(rotationDegrees != 0)
-        if (rotationDegrees != 0) {
+        val needsTexture = rotationDegrees != 0 || activeMirrorCrop().width() < 0.99f
+        setMirrorRotateLayerVisible(needsTexture)
+        if (needsTexture) {
             setTextureRotation(mirrorRotateTexture, StreamStats.videoWidth, StreamStats.videoHeight)
         }
     }
@@ -1069,7 +1124,7 @@ class PlayerActivity : AppCompatActivity() {
         // TextureView 第一次显示时 SurfaceTexture 要等一帧绘制才就绪。这段时间继续用 SurfaceView，
         // 千万不能发布 null：解码器会当成 Surface 丢失而重建，重建后要等 iPhone 的下一个关键帧，
         // 静止画面下可能一直黑屏。就绪后再原地切过去。
-        val useTexture = isMirrorSession() && rotationDegrees != 0 && mirrorTextureSurface != null
+        val useTexture = isMirrorSession() && (rotationDegrees != 0 || activeMirrorCrop().width() < 0.99f) && mirrorTextureSurface != null
         val target = if (useTexture) mirrorTextureSurface else mirrorHolderSurface
         if (target !== mirrorSurface) {
             Timber.i("Mirror render target -> ${if (useTexture) "TextureView" else "SurfaceView"} (${if (target == null) "not ready" else "ready"})")
@@ -1079,6 +1134,14 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun applyExoRotation() {
         val currentPlayer = player ?: return
+        // overlay 位于 PlayerView 的内容框内。旋转时先让内容框占满屏幕，
+        // 否则竖屏片源会先被缩成窄条，旋转后再次缩放，画面始终很小。
+        val resizeMode = if (rotationDegrees == 0) {
+            AspectRatioFrameLayout.RESIZE_MODE_FIT
+        } else {
+            AspectRatioFrameLayout.RESIZE_MODE_FILL
+        }
+        if (playerView.resizeMode != resizeMode) playerView.resizeMode = resizeMode
         if (rotationDegrees == 0) {
             if (exoRotateLayer?.visibility == View.VISIBLE) {
                 exoRotateLayer?.visibility = View.GONE
@@ -1123,13 +1186,14 @@ class PlayerActivity : AppCompatActivity() {
         if (viewW <= 0f || viewH <= 0f) return
         val w = if (videoW > 0) videoW.toFloat() else viewW
         val h = if (videoH > 0) videoH.toFloat() else viewH
+        val crop = if (texture === mirrorRotateTexture) activeMirrorCrop() else RectF(0f, 0f, 1f, 1f)
         val sideways = rotationDegrees % 180 != 0
-        val rotatedW = if (sideways) h else w
-        val rotatedH = if (sideways) w else h
+        val rotatedW = if (sideways) h * crop.height() else w * crop.width()
+        val rotatedH = if (sideways) w * crop.width() else h * crop.height()
         val fit = minOf(viewW / rotatedW, viewH / rotatedH)
         val matrix = Matrix().apply {
             postScale(w / viewW, h / viewH)
-            postTranslate(-w / 2f, -h / 2f)
+            postTranslate(-w * crop.centerX(), -h * crop.centerY())
             postRotate(rotationDegrees.toFloat())
             postScale(fit, fit)
             postTranslate(viewW / 2f, viewH / 2f)
@@ -1167,6 +1231,72 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun isMirrorSession() = isAirPlayMirrorSession || isMiracastSession
+
+    private fun activeMirrorCrop(): RectF =
+        if (isMiracastSession && autoRotateToFit) miracastContent else RectF(0f, 0f, 1f, 1f)
+
+    /** 只分析 Miracast 原始解码帧，避免把旋转后的显示结果再次当作输入。 */
+    private fun sampleMiracastContent() {
+        if (Build.VERSION.SDK_INT < 24 || !isMiracastSession ||
+            !com.weekd.miracastreceiver.util.AppSettings.isAutoRotateToFit(this) || cropCopyPending) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastCropSampleAt < 1000) return
+        val surface = mirrorSurface?.takeIf { it.isValid } ?: return
+        lastCropSampleAt = now
+        val session = cropSession
+        val bitmap = Bitmap.createBitmap(192, 108, Bitmap.Config.ARGB_8888)
+        cropCopyPending = true
+        try {
+            PixelCopy.request(surface, bitmap, { result ->
+                cropCopyPending = false
+                try {
+                    if (result == PixelCopy.SUCCESS && session == cropSession && !isDestroyed && isMiracastSession) {
+                        detectMiracastContent(bitmap)
+                    }
+                } finally { bitmap.recycle() }
+            }, Handler(Looper.getMainLooper()))
+        } catch (_: IllegalArgumentException) {
+            cropCopyPending = false
+            bitmap.recycle()
+        }
+    }
+
+    private fun detectMiracastContent(bitmap: Bitmap) {
+        fun darkColumn(x: Int): Boolean {
+            var lit = 0
+            for (y in 0 until bitmap.height) {
+                val pixel = bitmap.getPixel(x, y)
+                if (maxOf((pixel shr 16) and 255, (pixel shr 8) and 255, pixel and 255) > 24) lit++
+            }
+            return lit <= 1
+        }
+        var left = 0
+        var right = bitmap.width - 1
+        while (left < right && darkColumn(left)) left++
+        while (right > left && darkColumn(right)) right--
+        val width = right - left + 1
+        // 全黑、极窄内容和不对称暗区不参与判断，保留上一次可靠结果。
+        if (width < bitmap.width / 5 || kotlin.math.abs(left - (bitmap.width - 1 - right)) > 6) {
+            cropCandidate = null
+            cropConfirmations = 0
+            return
+        }
+        // 留出两列保护边界，只处理两侧都存在的明显黑边。
+        val candidate = if (left >= 6 && bitmap.width - 1 - right >= 6)
+            RectF((left - 2f) / bitmap.width, 0f, (right + 3f) / bitmap.width, 1f)
+            else RectF(0f, 0f, 1f, 1f)
+        val old = cropCandidate
+        cropConfirmations = if (old != null && kotlin.math.abs(old.left - candidate.left) < 0.02f &&
+            kotlin.math.abs(old.right - candidate.right) < 0.02f) cropConfirmations + 1 else 1
+        cropCandidate = candidate
+        if (cropConfirmations >= 3 && (kotlin.math.abs(miracastContent.left - candidate.left) > 0.02f ||
+                kotlin.math.abs(miracastContent.right - candidate.right) > 0.02f)) {
+            miracastContent = candidate
+            Timber.i("Miracast content detected: $candidate")
+            applyRotation()
+        }
+    }
+
 
     /** 镜像和图片没有控制条，用浮动按钮旋转；点播视频的旋转按钮在控制条里。 */
     private fun usesRotateOverlay() = isMirrorSession() || isCurrentImage()
@@ -1282,6 +1412,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        cropSession++ // 丢弃退出前尚未返回的取帧结果。
         super.onDestroy()
         try {
             unregisterReceiver(controlReceiver)
@@ -1304,9 +1435,40 @@ class PlayerActivity : AppCompatActivity() {
         Timber.i("PlayerActivity destroyed")
     }
 
+    /**
+     * 退出播放界面的统一出口。遥控器返回键和手机端「停止投屏」都走这里。
+     *
+     * 开关关闭时回电视桌面，但这里不能只用 finish()：设置页经常已经压在同一个任务栈底下
+     * （用户先在电视上打开过 App 看 IP 或改设置），单 finish() 只是把播放页弹掉，
+     * 露出来的是下面那一页，看起来就是「退出投屏又回到了这个应用」。
+     * 用 finishAffinity() 把同一任务里同 affinity 的页面一起结束，任务空下来才回到桌面。
+     * 实测 finishAndRemoveTask() 在部分电视固件上只关掉播放页、不动下面的页面，不可用。
+     *
+     * 开关打开时走另一条路：把设置页带到栈顶再结束播放页。用 CLEAR_TOP + SINGLE_TOP
+     * 复用已经在栈里的实例（否则会再叠一个设置页，返回一次才退干净）。
+     */
+    private fun exitPlayer() {
+        if (AppSettings.isReturnToAppAfterCast(this)) {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+            )
+            finish()
+        } else {
+            finishAffinity()
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (isMirrorSession()) {
+            sendBroadcast(Intent("com.weekd.miracastreceiver.DISCONNECT_SENDER").apply {
+                setPackage(packageName)
+                putExtra("miracast", isMiracastSession)
+            })
+        }
         stopPlayback()
-        super.onBackPressed()
+        exitPlayer()
     }
 }
