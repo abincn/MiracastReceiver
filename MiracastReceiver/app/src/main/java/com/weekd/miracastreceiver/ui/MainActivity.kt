@@ -191,6 +191,11 @@ class MainActivity : AppCompatActivity() {
         tvDlnaLog.text = DlnaDiagnostic.summary()
         lastDlnaHistorySize = DlnaDiagnostic.historySize()
         switchAutoStart = findViewById(R.id.switch_auto_start)
+        findViewById<SwitchCompat>(R.id.switch_auto_rotate).apply {
+            isChecked = AppSettings.isAutoRotateToFit(this@MainActivity)
+            setOnCheckedChangeListener { _, checked -> AppSettings.setAutoRotateToFit(this@MainActivity, checked) }
+        }
+        switchReturnToApp = findViewById(R.id.switch_return_to_app)
         tvLanguageValue = findViewById(R.id.tv_language_value)
 
         // 开机自启开关
@@ -205,6 +210,12 @@ class MainActivity : AppCompatActivity() {
         btnCheckUpdate = findViewById(R.id.btn_check_update)
         tvVersion.text = getString(R.string.current_version, AppUpdate.currentVersionName(this))
         btnCheckUpdate.setOnClickListener { manualCheckUpdate() }
+        // 投屏结束后是否留在本应用
+        switchReturnToApp.isChecked = AppSettings.isReturnToAppAfterCast(this)
+        switchReturnToApp.setOnCheckedChangeListener { _, isChecked ->
+            AppSettings.setReturnToAppAfterCast(this, isChecked)
+            Timber.i("Return to app after cast set to $isChecked")
+        }
 
         // 界面语言
         findViewById<View>(R.id.setting_language).setOnClickListener { showLanguageDialog() }
@@ -363,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 获取 IP 地址
-        val ipAddress = NetworkUtils.getLocalIpAddress()
+        val ipAddress = NetworkUtils.getLocalIpAddress(this)
         if (ipAddress != null) {
             tvDeviceIp.text = getString(R.string.device_ip, ipAddress)
             Timber.i("Local IP: $ipAddress")
