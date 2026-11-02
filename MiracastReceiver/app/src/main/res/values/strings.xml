@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 默认语言（英文）。其他语言见 values-zh、values-zh-rTW 等目录，新增条目时要同步补齐。 -->
 <resources>
+    <string name="auto_rotate_to_fit">Auto-rotate to fit screen</string>
     <string name="app_name" translatable="false">Miracast Receiver</string>
 
     <!-- 首页 -->
@@ -18,6 +19,8 @@
     <string name="display_name">投屏名称用 App 名 + 型号</string>
     <string name="display_name_hint">开启后对外显示为“Miracast Receiver + 型号”，与电视自带投屏区分；关闭则跟随电视系统名称。改动重启应用后生效，无需手动输入。</string>
     <string name="display_name_restart">已保存，重启应用后生效</string>
+    <string name="return_to_app_after_cast">Return to this app after casting</string>
+    <string name="return_to_app_after_cast_hint">Stops on this settings page instead of going back to the TV home screen when you stop casting. Useful when you want to change settings right after a session.</string>
     <string name="status_no_network">No network connection</string>
     <string name="status_no_wifi">Not connected to Wi-Fi</string>
     <string name="status_service_starting">Starting service…</string>
@@ -118,4 +121,5 @@
     <string name="notification_channel_name">Cast receiver service</string>
     <string name="notification_channel_description">Keeps the cast receiver service running</string>
     <string name="notification_waiting">Waiting for AirPlay / DLNA / Miracast connections</string>
+    <string name="notification_stop_cast">Stop casting</string>
 </resources>
