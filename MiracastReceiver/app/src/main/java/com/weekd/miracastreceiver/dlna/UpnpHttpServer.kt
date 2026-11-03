@@ -174,16 +174,9 @@ class UpnpHttpServer(
         sendXmlResponse(output, DlnaXmlBuilder.buildRenderingControlScpd())
     }
 
-    // 1.2.10.1：只恢复 SOAPAction 大小写不敏感匹配（1.2.10 隔离验证后，客户端发 Soapaction 时被拒）。
-    // 其余两处隔离还原保持不变：请求体仍按 Content-Length 一次读字符，chunked 仍不支持。
-    private fun soapAction(headers: Map<String, String>): String? {
-        val value = headers.entries.firstOrNull { it.key.equals("SOAPAction", ignoreCase = true) }?.value
-        return SoapParser.extractAction(value)
-    }
-
     private fun handleAvTransportControl(output: OutputStream, body: String, headers: Map<String, String>) {
-        // 1.2.10.1：SOAPAction 大小写不敏感（见上方 soapAction），其余隔离还原不变。
-        val action = soapAction(headers)
+        // 1.2.10.1：SOAPAction 大小写不敏感（内联查找，返回类型与原代码一致），其余隔离还原不变。
+        val action = SoapParser.extractAction(headers.entries.firstOrNull { it.key.equals("SOAPAction", ignoreCase = true) }?.value)
         Timber.i("AVTransport action: $action")
         DlnaDiagnostic.recordRequest("AVTransport $action")
 
@@ -323,7 +316,7 @@ class UpnpHttpServer(
     }
 
     private fun handleRenderingControl(output: OutputStream, body: String, headers: Map<String, String>) {
-        val action = soapAction(headers)
+        val action = SoapParser.extractAction(headers.entries.firstOrNull { it.key.equals("SOAPAction", ignoreCase = true) }?.value)
         Timber.i("RenderingControl action: $action")
 
         val response = when (action) {
@@ -353,7 +346,7 @@ class UpnpHttpServer(
     }
 
     private fun handleConnectionManager(output: OutputStream, body: String, headers: Map<String, String>) {
-        val action = soapAction(headers)
+        val action = SoapParser.extractAction(headers.entries.firstOrNull { it.key.equals("SOAPAction", ignoreCase = true) }?.value)
         Timber.i("ConnectionManager action: $action")
 
         val response = when (action) {
