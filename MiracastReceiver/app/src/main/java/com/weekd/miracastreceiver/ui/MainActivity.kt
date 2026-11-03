@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCheckUpdate: Button
     private lateinit var tvLanguageValue: TextView
     private lateinit var switchDisplayName: SwitchCompat
+    private lateinit var switchReturnToApp: SwitchCompat
 
 
     /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说 */
