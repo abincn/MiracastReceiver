@@ -35,7 +35,6 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.ProgressBar
 
 /**
  * 主 Activity - 等待投屏连接
@@ -60,9 +59,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvMiracastStatus: TextView
     private lateinit var startupProgress: ProgressBar
-    private lateinit var switchAutoStart: SwitchCompat
-    private lateinit var switchReturnToApp: SwitchCompat
-    private lateinit var tvLanguageValue: TextView
     private lateinit var deviceNameDialog: DeviceNameDialog
     private val nameListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == AppSettings.KEY_RECEIVER_NAME) {
