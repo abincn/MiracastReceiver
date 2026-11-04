@@ -41,6 +41,7 @@ class SsdpServer(
 
     private var multicastSocket: MulticastSocket? = null
     private var serverJob: Job? = null
+    private var refreshJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
 
     fun start() {
@@ -81,6 +82,7 @@ class SsdpServer(
     }
 
     fun stop() {
+        refreshJob?.cancel()
         try {
             sendByebye()
             serverJob?.cancel()
@@ -215,6 +217,16 @@ class SsdpServer(
             } catch (e: Exception) {
                 Timber.e(e, "Error in periodic notify")
             }
+        }
+    }
+
+    /** Ask clients to reload device.xml after the friendly name changes. */
+    fun refreshAdvertisement() {
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
+            sendByebye()
+            kotlinx.coroutines.delay(250)
+            sendNotify()
         }
     }
 
