@@ -3,6 +3,7 @@ package com.weekd.miracastreceiver.ui
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -24,6 +25,8 @@ import com.weekd.miracastreceiver.discovery.MdnsAdvertiser
 import com.weekd.miracastreceiver.dlna.DlnaDiagnostic
 import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.update.AppUpdate
+import com.weekd.miracastreceiver.service.ReceiverStatus
+import com.weekd.miracastreceiver.castplus.CastPlusReceiver
 import com.weekd.miracastreceiver.util.AppLanguage
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.utils.NetworkUtils
@@ -32,6 +35,7 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.ProgressBar
 
 /**
  * 主 Activity - 等待投屏连接
@@ -54,6 +58,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchDisplayName: SwitchCompat
     private lateinit var switchReturnToApp: SwitchCompat
 
+    private lateinit var tvMiracastStatus: TextView
+    private lateinit var startupProgress: ProgressBar
+    private lateinit var switchAutoStart: SwitchCompat
+    private lateinit var switchReturnToApp: SwitchCompat
+    private lateinit var tvLanguageValue: TextView
+    private lateinit var deviceNameDialog: DeviceNameDialog
+    private val nameListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == AppSettings.KEY_RECEIVER_NAME) {
+            tvDeviceName.text = deviceInfoProvider.getDeviceName()
+            mdnsAdvertiser.stopMiracastAdvertising()
+            startAdvertising()
+        }
+    }
 
     /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说 */
     private var wifiPermissionPending = false
@@ -88,6 +105,7 @@ class MainActivity : AppCompatActivity() {
 
         initServices()
         initViews()
+        AppSettings.observe(this, nameListener)
         // 切换语言会重建本页（savedInstanceState 非空），这时不要把权限弹窗再弹一遍
         if (savedInstanceState == null) {
             requestWifiDirectPermissions()
@@ -99,7 +117,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestWifiDirectPermissions() {
-        val missing = WIFI_DIRECT_PERMISSIONS.filter {
+        val permissions = WIFI_DIRECT_PERMISSIONS.toMutableSet()
+        if (AppSettings.isCastPlusEnabled(this)) permissions += setOf(
+            Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isNotEmpty()) {
@@ -191,6 +212,17 @@ class MainActivity : AppCompatActivity() {
         scrollDlnaLog = findViewById(R.id.scroll_dlna_log)
         tvDlnaLog.text = DlnaDiagnostic.summary()
         lastDlnaHistorySize = DlnaDiagnostic.historySize()
+        findViewById<SwitchCompat>(R.id.switch_castplus).apply {
+            isChecked = AppSettings.isCastPlusEnabled(this@MainActivity)
+            isEnabled = Build.VERSION.SDK_INT >= 23
+            setOnCheckedChangeListener { _, checked ->
+                AppSettings.setCastPlusEnabled(this@MainActivity, checked)
+                if (checked) requestWifiDirectPermissions()
+                startCastService()
+            }
+        }
+        tvMiracastStatus = findViewById(R.id.tv_miracast_status)
+        startupProgress = findViewById(R.id.startup_progress)
         switchAutoStart = findViewById(R.id.switch_auto_start)
         findViewById<SwitchCompat>(R.id.switch_auto_rotate).apply {
             isChecked = AppSettings.isAutoRotateToFit(this@MainActivity)
@@ -222,9 +254,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.setting_language).setOnClickListener { showLanguageDialog() }
         tvLanguageValue.text = currentLanguageLabel()
 
-        // 设置设备名称：默认就是 App 名 + 型号，无需手动输入
+        // 设置设备名称：默认就是 App 名 + 型号，无需手动输入；点名称可改应用内保存名（开关关闭时生效）
         val deviceName = deviceInfoProvider.getDeviceName()
         tvDeviceName.text = deviceName
+        deviceNameDialog = DeviceNameDialog(this)
+        tvDeviceName.setOnClickListener { deviceNameDialog.show() }
 
         // 投屏名称开关：遥控器直接拨动，不弹输入框。
         // 1.2.9.1 的输入框 + 即时重启服务是点保存后走不下去的
@@ -366,7 +400,6 @@ class MainActivity : AppCompatActivity() {
         if (!NetworkUtils.isNetworkAvailable(this)) {
             tvStatus.text = getString(R.string.status_no_network)
             Timber.w("Network not available")
-            return
         }
 
         if (!NetworkUtils.isWifiConnected(this)) {
@@ -420,11 +453,44 @@ class MainActivity : AppCompatActivity() {
     private fun updateStatus() {
         lifecycleScope.launch {
             while (true) {
-                if (mdnsAdvertiser.isAdvertising()) {
-                    tvStatus.text = getString(R.string.waiting_connection)
-                } else {
-                    tvStatus.text = getString(R.string.status_service_starting)
-                }
+                val service = ReceiverStatus.service
+                val castPlus = CastPlusReceiver.current?.state?.value?.status ?: CastPlusReceiver.Status.OFF
+                findViewById<TextView>(R.id.tv_castplus_status).setText(when (castPlus) {
+                    CastPlusReceiver.Status.OFF -> R.string.castplus_off
+                    CastPlusReceiver.Status.UNSUPPORTED -> R.string.castplus_unsupported
+                    CastPlusReceiver.Status.PERMISSION_REQUIRED -> R.string.castplus_permission
+                    CastPlusReceiver.Status.STARTING -> R.string.castplus_starting
+                    CastPlusReceiver.Status.READY -> R.string.castplus_ready
+                    CastPlusReceiver.Status.PAIRING -> R.string.castplus_pairing
+                    CastPlusReceiver.Status.CONNECTING -> R.string.castplus_connecting
+                    CastPlusReceiver.Status.PLAYING -> R.string.castplus_playing
+                    CastPlusReceiver.Status.PAUSED -> R.string.castplus_paused
+                    CastPlusReceiver.Status.DISCONNECTING -> R.string.castplus_disconnecting
+                    CastPlusReceiver.Status.ERROR -> R.string.castplus_error
+                })
+                val miracast = ReceiverStatus.miracast
+                tvStatus.setText(when (service) {
+                    ReceiverStatus.Service.STARTING -> R.string.status_service_starting
+                    ReceiverStatus.Service.WAITING_NETWORK -> R.string.status_waiting_network
+                    ReceiverStatus.Service.RUNNING -> R.string.status_receiver_running
+                    ReceiverStatus.Service.STOPPED -> R.string.status_receiver_stopped
+                })
+                tvMiracastStatus.visibility = if (service == ReceiverStatus.Service.RUNNING) View.VISIBLE else View.GONE
+                tvMiracastStatus.setText(when (miracast) {
+                    ReceiverStatus.Miracast.CHECKING -> R.string.status_miracast_checking
+                    ReceiverStatus.Miracast.ADVERTISING -> R.string.status_miracast_advertising
+                    ReceiverStatus.Miracast.SYSTEM_MANAGED -> R.string.status_miracast_system
+                    ReceiverStatus.Miracast.ROOT_REQUIRED -> R.string.status_miracast_root_required
+                    ReceiverStatus.Miracast.SETUP_FAILED -> R.string.status_miracast_failed
+                    ReceiverStatus.Miracast.UNSUPPORTED -> R.string.status_miracast_unsupported
+                    ReceiverStatus.Miracast.PERMISSION_REQUIRED -> R.string.status_miracast_permission
+                    ReceiverStatus.Miracast.WIFI_DISABLED -> R.string.status_miracast_wifi_disabled
+                })
+                startupProgress.visibility = if (service == ReceiverStatus.Service.STARTING ||
+                    service == ReceiverStatus.Service.WAITING_NETWORK ||
+                    (service == ReceiverStatus.Service.RUNNING && miracast == ReceiverStatus.Miracast.CHECKING))
+                    View.VISIBLE else View.GONE
+
                 // 1.2.9.4：每 2 秒刷新下方滚动日志；只有新增记录时才滚到底，
                 // 免得用户正往上翻旧记录时被自动滚动打断。
                 if (::tvDlnaLog.isInitialized) {
@@ -442,7 +508,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStop() {
+        deviceNameDialog.close()
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        AppSettings.unobserve(this, nameListener)
         super.onDestroy()
         mdnsAdvertiser.stopAdvertising()
         Timber.i("MainActivity destroyed")
