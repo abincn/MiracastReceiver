@@ -14,15 +14,16 @@ import com.weekd.miracastreceiver.utils.NetworkUtils
 class DeviceInfoProvider(private val context: Context) {
 
     /**
-     * 对外显示的设备名，AirPlay / DLNA / Miracast 共用。
+     * 对外显示的设备名，AirPlay / DLNA / Google Cast / 自定义发现共用。
      *
      * 默认（AppSettings 开关开启，无需手动输入）：「App 名 + 型号」，
      * 例如「Miracast Receiver XR-65X91K」。App 名取 R.string.app_name，
      * 型号取 Build.MODEL。只改本应用的广播名，不改电视系统名，
      * 所以电视自带投屏不会跟着变 —— 同一台电视上出现两个同名
      * 条目时，靠这个前缀区分。
-     * 开关关闭时退回：系统设置里的设备名称（Settings.Global
-     * `device_name`，即电视「设置 → 关于 → 设备名称」）>「厂商 型号」。
+     * 开关关闭时退回：应用内保存的名称（1.2.12 的接收器命名）>
+     * 系统设置里的设备名称（Settings.Global `device_name`，即电视
+     * 「设置 → 关于 → 设备名称」）>「厂商 型号」。
      * 常量 Settings.Global.DEVICE_NAME 是 API 25 才加的，minSdk 21 所以直接用键名。
      */
     fun getDeviceName(): String {
@@ -41,6 +42,7 @@ class DeviceInfoProvider(private val context: Context) {
             return listOf(appName, model).filter { it.isNotEmpty() }.joinToString(" ")
                 .ifEmpty { "Android TV" }
         }
+        AppSettings.getReceiverName(context).takeIf { it.isNotBlank() }?.let { return it }
         val systemName = try {
             Settings.Global.getString(context.contentResolver, "device_name")
         } catch (e: Exception) {
