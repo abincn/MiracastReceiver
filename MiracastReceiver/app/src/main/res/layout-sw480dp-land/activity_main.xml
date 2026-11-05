@@ -21,13 +21,18 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:baselineAligned="false"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingLeft="64dp"
         android:paddingTop="24dp"
         android:paddingRight="56dp"
         android:paddingBottom="24dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
         <!-- ============ 左栏：设备身份与接收状态 ============ -->
         <LinearLayout
@@ -113,35 +118,7 @@
                 android:textSize="16sp" />
         </LinearLayout>
 
-            <!-- DLNA 日志（fork）：主界面下方滚动日志，投屏诊断用 -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:text="DLNA 日志"
-                android:textColor="@color/text_secondary"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-
-            <ScrollView
-                android:id="@+id/scroll_dlna_log"
-                android:layout_width="match_parent"
-                android:layout_height="240dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/bg_setting_item"
-                android:fadeScrollbars="false"
-                android:focusable="true"
-                android:padding="12dp"
-                android:scrollbars="vertical">
-
-                <TextView
-                    android:id="@+id/tv_dlna_log"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:lineSpacingExtra="2dp"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-            </ScrollView>
+            
 
         <!-- 两栏之间的分隔线，让左右关系更明确 -->
         <View
@@ -385,5 +362,36 @@
                 android:textSize="15sp" />
         </LinearLayout>
     </LinearLayout>
+
+    <!-- DLNA 日志（fork）：主界面下方滚动日志，投屏诊断用 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="DLNA 日志"
+                android:textColor="@color/text_secondary"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <ScrollView
+                android:id="@+id/scroll_dlna_log"
+                android:layout_width="match_parent"
+                android:layout_height="240dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_setting_item"
+                android:fadeScrollbars="false"
+                android:focusable="true"
+                android:padding="12dp"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/tv_dlna_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="2dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+            </ScrollView>
+</LinearLayout>
 
 </ScrollView>
