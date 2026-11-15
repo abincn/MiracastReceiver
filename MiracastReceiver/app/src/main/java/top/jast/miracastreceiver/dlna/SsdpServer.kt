@@ -43,6 +43,9 @@ class SsdpServer(
     private var serverJob: Job? = null
     private var refreshJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val advertisedTargets = listOf(
+        "upnp:rootdevice", "uuid:$deviceUuid", DEVICE_TYPE, SERVICE_TYPE_AV, SERVICE_TYPE_RC, SERVICE_TYPE_CM
+    )
 
     fun start() {
         if (serverJob?.isActive == true) {
@@ -94,11 +97,8 @@ class SsdpServer(
     }
 
     private fun handleSearchRequest(message: String, address: InetAddress, port: Int) {
-        Timber.d("SSDP search from ${address.hostAddress}:$port")
-
-        // 检查搜索目标
-        val searchTarget = extractSearchTarget(message)
-
+        val searchTarget = extractSearchTarget(message) ?: return
+        Timber.d("SSDP search from ${address.hostAddress}:$port ST=$searchTarget")
         // 1.2.9.5：把每一次 M-SEARCH 都写进主界面滚动日志。
         // 微信视频号搜不到时，这一行是关键证据：
         // 有这一行 = 微信发了 DLNA 搜索、电视收到了，问题在回包/过滤；
@@ -106,10 +106,14 @@ class SsdpServer(
         DlnaDiagnostic.recordRequest(
             "SSDP 搜索 ST=${searchTarget ?: "(无 ST)"} 来自 ${address.hostAddress}"
         )
+        if (searchTarget == "ssdp:all") {
+            // 上游 1.2.16：按 UPnP 规范回多条（每设备/每服务一条），与 fork 1.2.9.5 的做法一致。
+            advertisedTargets.forEach { sendSearchResponse(address, port, it) }
+            DlnaDiagnostic.recordRequest("SSDP 回复 ssdp:all 给 ${address.hostAddress}")
+            return
+        }
 
         val shouldRespond = when {
-            searchTarget == null -> false
-            searchTarget == "ssdp:all" -> true
             searchTarget == "upnp:rootdevice" -> true
             searchTarget.contains("MediaRenderer") -> true
             searchTarget.contains("AVTransport") -> true
@@ -120,26 +124,8 @@ class SsdpServer(
         }
 
         if (shouldRespond) {
-            if (searchTarget == "ssdp:all") {
-                // 1.2.9.5：按 UPnP 规范，ssdp:all 应回多条（每设备/每服务一条），
-                // 原实现只回一条 ST=ssdp:all，严格客户端可能据此丢弃。
-                // 回包顺序与 NOTIFY 一致：rootdevice、uuid、设备、三个服务。
-                val targets = listOf(
-                    "upnp:rootdevice",
-                    "uuid:$deviceUuid",
-                    DEVICE_TYPE,
-                    SERVICE_TYPE_AV,
-                    SERVICE_TYPE_RC,
-                    SERVICE_TYPE_CM
-                )
-                for (target in targets) {
-                    sendSearchResponse(address, port, target)
-                }
-                DlnaDiagnostic.recordRequest("SSDP 回复 ssdp:all 共 6 条给 ${address.hostAddress}")
-            } else {
-                sendSearchResponse(address, port, searchTarget ?: "upnp:rootdevice")
-                DlnaDiagnostic.recordRequest("SSDP 回复 ST=$searchTarget 给 ${address.hostAddress}")
-            }
+            sendSearchResponse(address, port, searchTarget)
+            DlnaDiagnostic.recordRequest("SSDP 回复 ST=$searchTarget 给 ${address.hostAddress}")
         } else {
             DlnaDiagnostic.recordRequest("SSDP 未回复 ST=$searchTarget（不在支持列表）")
         }
@@ -153,6 +139,7 @@ class SsdpServer(
         } catch (e: Exception) {
             ""
         }
+    }
     }
 
     private fun extractSearchTarget(message: String): String? {
@@ -233,20 +220,11 @@ class SsdpServer(
     private fun sendNotify() {
         val location = "http://$localIp:$httpPort/device.xml"
 
-        val notifications = listOf(
-            "upnp:rootdevice",
-            "uuid:$deviceUuid",
-            DEVICE_TYPE,
-            SERVICE_TYPE_AV,
-            SERVICE_TYPE_RC,
-            SERVICE_TYPE_CM
-        )
-
         try {
             val socket = DatagramSocket()
             val group = InetAddress.getByName(SSDP_ADDRESS)
 
-            for (nt in notifications) {
+            for (nt in advertisedTargets) {
                 val message = buildString {
                     append("NOTIFY * HTTP/1.1\r\n")
                     append("HOST: $SSDP_ADDRESS:$SSDP_PORT\r\n")
@@ -277,20 +255,11 @@ class SsdpServer(
     }
 
     private fun sendByebye() {
-        val notifications = listOf(
-            "upnp:rootdevice",
-            "uuid:$deviceUuid",
-            DEVICE_TYPE,
-            SERVICE_TYPE_AV,
-            SERVICE_TYPE_RC,
-            SERVICE_TYPE_CM
-        )
-
         try {
             val socket = DatagramSocket()
             val group = InetAddress.getByName(SSDP_ADDRESS)
 
-            for (nt in notifications) {
+            for (nt in advertisedTargets) {
                 val message = buildString {
                     append("NOTIFY * HTTP/1.1\r\n")
                     append("HOST: $SSDP_ADDRESS:$SSDP_PORT\r\n")
