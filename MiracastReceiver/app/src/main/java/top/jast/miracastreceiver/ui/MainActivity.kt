@@ -10,12 +10,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
-import android.widget.Toast
 import android.widget.Button
-import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
+import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -27,14 +27,13 @@ import top.jast.miracastreceiver.service.CastReceiverService
 import top.jast.miracastreceiver.update.AppUpdate
 import top.jast.miracastreceiver.service.ReceiverStatus
 import top.jast.miracastreceiver.castplus.CastPlusReceiver
-import top.jast.miracastreceiver.util.AppLanguage
 import top.jast.miracastreceiver.util.AppSettings
 import top.jast.miracastreceiver.utils.NetworkUtils
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.ProgressBar
 
 /**
  * 主 Activity - 等待投屏连接
@@ -50,15 +49,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDlnaLog: TextView
     private lateinit var scrollDlnaLog: ScrollView
     private var lastDlnaHistorySize = -1
-    private lateinit var switchAutoStart: SwitchCompat
     private lateinit var tvVersion: TextView
     private lateinit var btnCheckUpdate: Button
-    private lateinit var tvLanguageValue: TextView
-    private lateinit var switchDisplayName: SwitchCompat
-    private lateinit var switchReturnToApp: SwitchCompat
-
     private lateinit var tvMiracastStatus: TextView
     private lateinit var startupProgress: ProgressBar
+    private lateinit var settingsMenu: ReceiverSettingsMenu
     private lateinit var deviceNameDialog: DeviceNameDialog
     private val nameListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == AppSettings.KEY_RECEIVER_NAME) {
@@ -208,89 +203,33 @@ class MainActivity : AppCompatActivity() {
         scrollDlnaLog = findViewById(R.id.scroll_dlna_log)
         tvDlnaLog.text = DlnaDiagnostic.summary()
         lastDlnaHistorySize = DlnaDiagnostic.historySize()
-        findViewById<SwitchCompat>(R.id.switch_castplus).apply {
-            isChecked = AppSettings.isCastPlusEnabled(this@MainActivity)
-            isEnabled = Build.VERSION.SDK_INT >= 23
-            setOnCheckedChangeListener { _, checked ->
-                AppSettings.setCastPlusEnabled(this@MainActivity, checked)
-                if (checked) requestWifiDirectPermissions()
-                startCastService()
-            }
-        }
         tvMiracastStatus = findViewById(R.id.tv_miracast_status)
         startupProgress = findViewById(R.id.startup_progress)
-        switchAutoStart = findViewById(R.id.switch_auto_start)
-        findViewById<SwitchCompat>(R.id.switch_auto_rotate).apply {
-            isChecked = AppSettings.isAutoRotateToFit(this@MainActivity)
-            setOnCheckedChangeListener { _, checked -> AppSettings.setAutoRotateToFit(this@MainActivity, checked) }
+        val gear = findViewById<View>(R.id.button_settings)
+        settingsMenu = ReceiverSettingsMenu(this, gear, { enabled ->
+            if (enabled) requestWifiDirectPermissions()
+            startCastService()
+        }) {
+            // 投屏名称开关（在齿轮菜单里）：只存开关，重启应用后生效，不在点击时停/启服务。
+            tvDeviceName.text = deviceInfoProvider.getDeviceName()
+            Toast.makeText(this, R.string.display_name_restart, Toast.LENGTH_SHORT).show()
+            Timber.i("Use app+model display name changed")
         }
-        switchReturnToApp = findViewById(R.id.switch_return_to_app)
-        tvLanguageValue = findViewById(R.id.tv_language_value)
-
-        // 开机自启开关
-        switchAutoStart.isChecked = AppSettings.isAutoStartOnBoot(this)
-        switchAutoStart.setOnCheckedChangeListener { _, isChecked ->
-            AppSettings.setAutoStartOnBoot(this, isChecked)
-            Timber.i("Auto start on boot set to $isChecked")
-        }
+        gear.setOnClickListener { settingsMenu.toggle() }
 
         // 应用更新：显示当前版本，按钮手动检查；启动时也会静默查一次
         tvVersion = findViewById(R.id.tv_version)
         btnCheckUpdate = findViewById(R.id.btn_check_update)
         tvVersion.text = getString(R.string.current_version, AppUpdate.currentVersionName(this))
         btnCheckUpdate.setOnClickListener { manualCheckUpdate() }
-        // 投屏结束后是否留在本应用
-        switchReturnToApp.isChecked = AppSettings.isReturnToAppAfterCast(this)
-        switchReturnToApp.setOnCheckedChangeListener { _, isChecked ->
-            AppSettings.setReturnToAppAfterCast(this, isChecked)
-            Timber.i("Return to app after cast set to $isChecked")
-        }
 
-        // 界面语言
-        findViewById<View>(R.id.setting_language).setOnClickListener { showLanguageDialog() }
-        tvLanguageValue.text = currentLanguageLabel()
-
-        // 设置设备名称：默认就是 App 名 + 型号，无需手动输入；点名称可改应用内保存名（开关关闭时生效）
+        // 设置设备名称
         val deviceName = deviceInfoProvider.getDeviceName()
         tvDeviceName.text = deviceName
         deviceNameDialog = DeviceNameDialog(this)
         tvDeviceName.setOnClickListener { deviceNameDialog.show() }
-
-        // 投屏名称开关：遥控器直接拨动，不弹输入框。
-        // 1.2.9.1 的输入框 + 即时重启服务是点保存后走不下去的
-        // 可疑点（对话框焦点、服务重启时序），本版改成只存开关、
-        // 重启应用后生效，绝不在点击时停/启服务。
-        switchDisplayName = findViewById(R.id.switch_display_name)
-        switchDisplayName.isChecked = AppSettings.isUseAppModelName(this)
-        switchDisplayName.setOnCheckedChangeListener { _, isChecked ->
-            AppSettings.setUseAppModelName(this, isChecked)
-            tvDeviceName.text = deviceInfoProvider.getDeviceName()
-            Toast.makeText(this, R.string.display_name_restart, Toast.LENGTH_SHORT).show()
-            Timber.i("Use app+model display name set to $isChecked")
-        }
     }
-    /** 第一项是「跟随系统」，其后是 [AppLanguage.OPTIONS]。 */
-    private fun languageLabels(): Array<String> =
-        arrayOf(getString(R.string.language_follow_system)) + AppLanguage.OPTIONS.map { it.second }
 
-    private fun currentLanguageIndex(): Int = AppLanguage.currentIndex() + 1
-
-    private fun currentLanguageLabel(): String = languageLabels()[currentLanguageIndex()]
-
-    private fun showLanguageDialog() {
-        val checked = currentLanguageIndex()
-        AlertDialog.Builder(this)
-            .setTitle(R.string.language)
-            .setSingleChoiceItems(languageLabels(), checked) { dialog, which ->
-                dialog.dismiss()
-                if (which == checked) return@setSingleChoiceItems
-                val tag = if (which == 0) "" else AppLanguage.OPTIONS[which - 1].first
-                Timber.i("Switching app language to '${tag.ifEmpty { "system" }}'")
-                // 会重建当前页面，新页面直接用新语言
-                AppLanguage.apply(this, tag)
-            }
-            .show()
-    }
 
     /**
      * 手动检查更新：按钮触发。检查失败会明确提示失败原因，
@@ -392,6 +331,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_SETTINGS) {
+            settingsMenu.toggle()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     private fun checkNetworkAndStart() {
         if (!NetworkUtils.isNetworkAvailable(this)) {
             tvStatus.text = getString(R.string.status_no_network)
@@ -486,7 +433,6 @@ class MainActivity : AppCompatActivity() {
                     service == ReceiverStatus.Service.WAITING_NETWORK ||
                     (service == ReceiverStatus.Service.RUNNING && miracast == ReceiverStatus.Miracast.CHECKING))
                     View.VISIBLE else View.GONE
-
                 // 1.2.9.4：每 2 秒刷新下方滚动日志；只有新增记录时才滚到底，
                 // 免得用户正往上翻旧记录时被自动滚动打断。
                 if (::tvDlnaLog.isInitialized) {
@@ -505,6 +451,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        settingsMenu.close()
         deviceNameDialog.close()
         super.onStop()
     }
