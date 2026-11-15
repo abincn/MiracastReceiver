@@ -140,7 +140,6 @@ class SsdpServer(
             ""
         }
     }
-    }
 
     private fun extractSearchTarget(message: String): String? {
         // 1.2.9.5：同时按 \r\n 和 \n 切行，原实现只按 \r\n 切，
