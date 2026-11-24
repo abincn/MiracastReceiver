@@ -58,6 +58,7 @@ class DlnaMediaRenderer {
         onSetUri?.invoke(state.uri, metadata)
     }
 
+    @Synchronized
     fun play() {
         if (state.uri.isNotBlank()) {
             state.transportState = TransportState.PLAYING
@@ -66,7 +67,9 @@ class DlnaMediaRenderer {
         }
     }
 
+    @Synchronized
     fun pause() {
+        if (state.uri.isBlank()) return
         state.transportState = TransportState.PAUSED_PLAYBACK
         Timber.i("DLNA Pause")
         onPause?.invoke()
@@ -78,7 +81,9 @@ class DlnaMediaRenderer {
         onStop?.invoke()
     }
 
+    @Synchronized
     fun seek(target: String) {
+        if (state.uri.isBlank()) return
         val position = parseTimeToMs(target)
         state.position = position
         Timber.i("DLNA Seek: $target -> $position ms")
@@ -92,7 +97,9 @@ class DlnaMediaRenderer {
         onSpeedChanged?.invoke(value)
     }
 
+    @Synchronized
     fun setQualityUri(uri: String) {
+        if (state.uri.isBlank()) return
         val decoded = decodeXmlEntities(uri)
         if (decoded.isNotBlank()) {
             state.uri = decoded
@@ -120,7 +127,11 @@ class DlnaMediaRenderer {
     fun onPlayerStopped(sessionId: Long, releaseMedia: Boolean): Boolean {
         if (sessionId != mediaSessionId) return false
         if (releaseMedia) {
-            state = MediaState(volume = state.volume, muted = state.muted)
+            // A previously active sender must observe an explicit Stop when the
+            // TV exits or another protocol takes over. Some controllers keep
+            // their playing UI when we jump straight to NO_MEDIA_PRESENT.
+            state = MediaState(transportState = TransportState.STOPPED,
+                volume = state.volume, muted = state.muted)
             mediaSessionId++
         } else {
             updatePosition(0L, 0L)
@@ -146,7 +157,9 @@ class DlnaMediaRenderer {
     }
 
     fun setStopped() {
-        state.transportState = if (state.uri.isBlank()) TransportState.NO_MEDIA_PRESENT else TransportState.STOPPED
+        if (state.uri.isNotBlank() || state.transportState != TransportState.NO_MEDIA_PRESENT) {
+            state.transportState = TransportState.STOPPED
+        }
     }
 
     fun setPaused() {
