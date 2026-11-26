@@ -23,8 +23,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 29
-        versionName = "1.2.17"
+        versionCode = 30
+        versionName = "1.2.17.1"
         buildConfigField("boolean", "USE_UXPLAY", useUxPlay.toString())
         if (useUxPlay) minSdk = 23
 
@@ -62,6 +62,13 @@ android {
             reset()
             include(*targetAbis.toTypedArray())
             isUniversalApk = buildUniversalApk
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // root 需要从 nativeLibraryDir 执行 libwfdctl.so，安装时必须将它解压到磁盘。
+            useLegacyPackaging = true
         }
     }
 
